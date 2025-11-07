@@ -1,45 +1,77 @@
-# Use the latest 2.1 version of CircleCI pipeline process engine.
-# See: https://circleci.com/docs/reference/configuration-reference
-
-# For a detailed guide to building and testing with Python, read the docs:
-# https://circleci.com/docs/language-python/ for more details
 version: 2.1
 
-# Orbs are reusable packages of CircleCI configuration that you may share across projects, enabling you to create encapsulated, parameterized commands, jobs, and executors that can be used across multiple projects.
-# See: https://circleci.com/docs/orbs/use/orb-intro/
-orbs:
-  # See the Python orb documentation here: https://circleci.com/developer/orbs/orb/circleci/python
-  python: circleci/python@2.1.1
-
-# Define a job to be invoked later in a workflow.
-# See: https://circleci.com/docs/guides/orchestrate/jobs-steps/#jobs-overview & https://circleci.com/docs/reference/configuration-reference/#jobs
-jobs:
-  build-and-test:
-    # Specify the execution environment. You can specify an image from Docker Hub or use one of our convenience images from CircleCI's Developer Hub.
-    # See: https://circleci.com/docs/guides/execution-managed/executor-intro/ & https://circleci.com/docs/reference/configuration-reference/#executor-job
+executors:
+  docker-executor:
     docker:
-      # Specify the version you desire here
-      # See:https://circleci.com/developer/images/image/cimg/python
-      - image: cimg/python:3.12
+      - image: cimg/base:stable
+    working_directory: ~/repo
+    # Nếu cần tài nguyên mạnh hơn khi chạy 3 container/song song:
+    # resource_class: large
 
-    # Add steps to the job
-    # See: https://circleci.com/docs/guides/orchestrate/jobs-steps/#steps-overview & https://circleci.com/docs/reference/configuration-reference/#steps
+parameters:
+  instance:
+    type: integer
+    default: 1
+
+jobs:
+  build:
+    executor: docker-executor
     steps:
-      # Checkout the code as the first step.
       - checkout
-      - python/install-packages:
-          pkg-manager: pip
-          # app-dir: ~/project/package-directory/  # If your requirements.txt isn't in the root directory.
-          # pip-dependency-file: test-requirements.txt  # if you have a different name for your requirements file, maybe one that combines your runtime and test requirements.
+      - setup_remote_docker
       - run:
-          name: Run tests
-          # This assumes pytest is installed via the install-package step above
-          command: pytest
+          name: Build Docker image
+          command: |
+            docker build -t myapp:latest .
+      - run:
+          name: Save image to workspace
+          command: |
+            docker save myapp:latest -o myapp.tar
+      - persist_to_workspace:
+          root: ~/repo
+          paths:
+            - myapp.tar
 
-# Orchestrate jobs using workflows
-# See: https://circleci.com/docs/guides/orchestrate/workflows/ & https://circleci.com/docs/reference/configuration-reference/#workflows
+  run-containers:
+    executor: docker-executor
+    parameters:
+      instance:
+        type: integer
+    steps:
+      - checkout
+      - setup_remote_docker
+      - attach_workspace:
+          at: ~/repo
+      - run:
+          name: Load image from workspace
+          command: |
+            docker load -i myapp.tar
+      - run:
+          name: Run 3 containers in parallel (15 minutes each)
+          command: |
+            echo "Running instance << parameters.instance >>"
+            pids=()
+            for i in 1 2 3; do
+              echo "Starting container $i for instance << parameters.instance >>"
+              # chạy 15 phút rồi tự dừng
+              timeout 900 docker run --rm myapp:latest &
+              pids+=($!)
+            done
+
+            status=0
+            for pid in "${pids[@]}"; do
+              wait "$pid" || status=1
+            done
+            exit $status
+
 workflows:
-  sample: # This is the name of the workflow, feel free to change it to better match your workflow.
-    # Inside the workflow, you define the jobs you want to run.
+  version: 2
+  build_and_run:
     jobs:
-      - build-and-test
+      - build
+      - run-containers:
+          requires:
+            - build
+          matrix:
+            parameters:
+              instance: [1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20]
